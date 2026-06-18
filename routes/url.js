@@ -8,11 +8,16 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
 
 const summarizeUrl = async (url) => {
     try {
+        console.log('Calling Gemini for:', url)
+        console.log('API Key exists:', !!process.env.GEMINI_API_KEY)
         const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
         const prompt = `In 2-3 sentences, describe what this URL is likely about based on its address. Be concise and informative. URL: ${url}`
         const result = await model.generateContent(prompt)
-        return result.response.text()
+        const summary = result.response.text()
+        console.log('Summary generated:', summary)
+        return summary
     } catch (err) {
+        console.log('Gemini error:', err.message)
         return 'Summary unavailable.'
     }
 }
