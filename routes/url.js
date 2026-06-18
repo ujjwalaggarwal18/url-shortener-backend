@@ -10,7 +10,7 @@ const summarizeUrl = async (url) => {
     try {
         console.log('Calling Gemini for:', url)
         console.log('API Key exists:', !!process.env.GEMINI_API_KEY)
-        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
         const prompt = `In 2-3 sentences, describe what this URL is likely about based on its address. Be concise and informative. URL: ${url}`
         const result = await model.generateContent(prompt)
         const summary = result.response.text()
