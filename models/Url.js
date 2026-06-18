@@ -13,4 +13,5 @@ const urlSchema = new mongoose.Schema({
     clicks: [clickSchema]
 })
 
+
 module.exports = mongoose.model('Url', urlSchema)

@@ -2,6 +2,20 @@ const express = require('express')
 const router = express.Router()
 const { nanoid } = require('nanoid')
 const Url = require('../models/Url')
+const { GoogleGenerativeAI } = require('@google/generative-ai')
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+
+const summarizeUrl = async (url) => {
+    try {
+        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
+        const prompt = `In 2-3 sentences, describe what this URL is likely about based on its address. Be concise and informative. URL: ${url}`
+        const result = await model.generateContent(prompt)
+        return result.response.text()
+    } catch (err) {
+        return 'Summary unavailable.'
+    }
+}
 
 // POST /shorten — create a short URL
 router.post('/shorten', async (req, res) => {
@@ -15,17 +29,19 @@ router.post('/shorten', async (req, res) => {
         // Check if this URL was already shortened
         let existing = await Url.findOne({ originalUrl })
         if (existing) {
-            return res.json({ shortCode: existing.shortCode })
+            return res.json({ shortCode: existing.shortCode, summary: existing.summary })
         }
 
         // Generate a unique short code
         const shortCode = nanoid(5)
 
         // Save to DB
-        const newUrl = new Url({ originalUrl, shortCode })
+        const summary = await summarizeUrl(originalUrl)
+
+        const newUrl = new Url({ originalUrl, shortCode, summary })
         await newUrl.save()
 
-        res.json({ shortCode, shortUrl: `http://localhost:3000/${shortCode}` })
+        res.json({ shortCode, shortUrl: `http://localhost:3000/${shortCode}`, summary })
     } catch (err) {
         res.status(500).json({ error: 'Server error' })
     }
