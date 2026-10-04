@@ -1,53 +1,95 @@
 const express = require('express')
 const router = express.Router()
 const { nanoid } = require('nanoid')
+const rateLimit = require('express-rate-limit')
 const Url = require('../models/Url')
 const { GoogleGenerativeAI } = require('@google/generative-ai')
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
 
+// Limits how often one IP can call /shorten (protects Gemini quota + DB)
+const shortenLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15-minute window
+    limit: 20,                // 20 requests per IP per window
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests, try again later' }
+})
+
+// Accepts only real http(s) URLs given as strings
+const isValidHttpUrl = (value) => {
+    if (typeof value !== 'string' || value.length > 2048) return false
+    try {
+        const u = new URL(value)
+        return u.protocol === 'http:' || u.protocol === 'https:'
+    } catch {
+        return false
+    }
+}
+
+const buildShortUrl = (req, shortCode) =>
+    `${req.protocol}://${req.get('host')}/${shortCode}`
+
 const summarizeUrl = async (url) => {
     try {
-        console.log('Calling Gemini for:', url)
-        console.log('API Key exists:', !!process.env.GEMINI_API_KEY)
         const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
         const prompt = `In 2-3 sentences, describe what this URL is likely about based on its address. Be concise and informative. URL: ${url}`
         const result = await model.generateContent(prompt)
-        const summary = result.response.text()
-        console.log('Summary generated:', summary)
-        return summary
+        return result.response.text()
     } catch (err) {
         console.log('Gemini error:', err.message)
-        return 'Summary unavailable.'
+        return null
     }
 }
 
 // POST /shorten — create a short URL
-router.post('/shorten', async (req, res) => {
+router.post('/shorten', shortenLimiter, async (req, res) => {
     const { originalUrl } = req.body
 
-    if (!originalUrl) {
-        return res.status(400).json({ error: 'originalUrl is required' })
+    if (!isValidHttpUrl(originalUrl)) {
+        return res.status(400).json({ error: 'A valid http(s) URL is required' })
     }
 
     try {
         // Check if this URL was already shortened
-        let existing = await Url.findOne({ originalUrl })
+        const existing = await Url.findOne({ originalUrl })
         if (existing) {
-            return res.json({ shortCode: existing.shortCode, summary: existing.summary })
+            return res.json({
+                shortCode: existing.shortCode,
+                shortUrl: buildShortUrl(req, existing.shortCode),
+                summary: existing.summary
+            })
         }
 
-        // Generate a unique short code
-        const shortCode = nanoid(5)
-
-        // Save to DB
+        // Call Gemini once, outside the retry loop
         const summary = await summarizeUrl(originalUrl)
 
-        const newUrl = new Url({ originalUrl, shortCode, summary })
-        await newUrl.save()
+        // Let the unique index on shortCode decide; retry only on duplicate-key errors
+        let newUrl
+        for (let attempt = 0; attempt < 5; attempt++) {
+            try {
+                newUrl = await Url.create({
+                    originalUrl,
+                    shortCode: nanoid(5),
+                    summary
+                })
+                break
+            } catch (err) {
+                if (err.code !== 11000) throw err
+            }
+        }
 
-        res.json({ shortCode, shortUrl: `http://localhost:3000/${shortCode}`, summary })
+        if (!newUrl) {
+            return res.status(500).json({ error: 'Could not generate a unique code' })
+        }
+
+        res.json({
+            shortCode: newUrl.shortCode,
+            shortUrl: buildShortUrl(req, newUrl.shortCode),
+            summary: newUrl.summary
+        })
     } catch (err) {
+        console.log('Shorten error:', err.message)
         res.status(500).json({ error: 'Server error' })
     }
 })
@@ -73,6 +115,7 @@ router.get('/analytics/:shortCode', async (req, res) => {
         res.status(500).json({ error: 'Server error' })
     }
 })
+
 // GET /:shortCode — redirect to original URL
 router.get('/:shortCode', async (req, res) => {
     const { shortCode } = req.params
@@ -84,7 +127,7 @@ router.get('/:shortCode', async (req, res) => {
             return res.status(404).json({ error: 'URL not found' })
         }
 
-        // Record the click
+        // Record the click (we'll make this atomic in the next lesson)
         url.clicks.push({
             timestamp: new Date(),
             browser: req.headers['user-agent'],
