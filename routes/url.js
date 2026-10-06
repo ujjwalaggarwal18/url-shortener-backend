@@ -121,23 +121,27 @@ router.get('/:shortCode', async (req, res) => {
     const { shortCode } = req.params
 
     try {
-        const url = await Url.findOne({ shortCode })
+        const url = await Url.findOneAndUpdate(
+            { shortCode },
+            {
+                $push: {
+                    clicks: {
+                        timestamp: new Date(),
+                        browser: req.headers['user-agent'],
+                        country: 'Unknown'
+                    }
+                }
+            },
+            { new: true }
+        )
 
         if (!url) {
             return res.status(404).json({ error: 'URL not found' })
         }
 
-        // Record the click (we'll make this atomic in the next lesson)
-        url.clicks.push({
-            timestamp: new Date(),
-            browser: req.headers['user-agent'],
-            country: 'Unknown'
-        })
-        await url.save()
-
-        // 302 redirect
         res.redirect(302, url.originalUrl)
     } catch (err) {
+        console.log('Redirect error:', err.message)
         res.status(500).json({ error: 'Server error' })
     }
 })
